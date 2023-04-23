@@ -28,5 +28,12 @@ library(evir)
 library(openxlsx)
 library(purrr)
 
+rendimientos <- as.vector(all_returns[[1]])
+rendimientos <- as.numeric(rendimientos)
+rendimientos <- rendimientos * (-1)
 
+umbral <- quantile(rendimientos, 0.95)
+extremos <- rendimientos[rendimientos > umbral]
+gpd_modelo <- gpd(rendimientos, umbral)
 
+help(mrlplot)

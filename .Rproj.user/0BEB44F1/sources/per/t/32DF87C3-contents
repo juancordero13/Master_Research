@@ -1,7 +1,4 @@
-####################################################################################################
-#######################-- BLOCK 0: SETTING UP THE ENVIRONMENT --####################################
-####################################################################################################
-
+# Installing the necessary packages
 install_if_missing <- function(package_name) {
   if (!require(package_name, character.only = TRUE)) {
     install.packages(package_name)
@@ -21,7 +18,7 @@ install_if_missing("openxlsx")
 install_if_missing("purrr")
 install_if_missing("ggplot2")
 install_if_missing("ggthemes")
-install_if_missing("eva")
+
 
 # Loading the necessary libraries
 library(quantmod)
@@ -37,8 +34,6 @@ library(purrr)
 library(ggplot2)
 library(ggthemes)
 library(Metrics)
-library(eva)
-
 
 ####################################################################################################
 ###########################-- BLOCK 1: DEFINING FUNCTIONS --########################################
@@ -96,7 +91,6 @@ desc_stats <- function(returns) {
     }
 
 # Defining a function for calculating VaR and ES
-# The function also calculate the GPD quantiles obtained for each optimal threshold value
 market_risk_measure <- function(returns, conf_level, size_train, threshold_value) {
 
     # Calculating the VaR and the ES for the returns
@@ -113,10 +107,8 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
     insample <- length(train_set)
 
     # Defining empty list where we'll store the results later
-    VaR <- c()
-    ES <- c()
-    gpd_quantiles <- c()
-    
+    VaR = c()
+    ES = c()
     # Looping over the returns
     for(j in 0:(outsample - 1)) {
 
@@ -128,7 +120,7 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
         # Fitting an APARCH(1,1) model to the training set
         # Using as a conditional distribution the normal distribution
         aparch_fit <- garchFit(~aparch(1,1), data = return_train, cond.dist = c("norm"),
-            trace = FALSE)
+                               trace = FALSE)
 
         # Storing the parameters of the fitted model
         mu <- coef(aparch_fit)[1]
@@ -154,8 +146,8 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
 
         # Forecasting the conditional volatility of the model one day ahead
         frcst_sigma <- (omega + 
-            alpha * (abs(residual_t) - gamma * residual_t) ^ delta +
-            beta * sigma_t ^ delta) ^ (1 / delta)
+                        alpha * (abs(residual_t) - gamma * residual_t) ^ delta +
+                        beta * sigma_t ^ delta) ^ (1 / delta)
 
         # Standarizing the returns
         z <- (return_train - mu) / sigmas
@@ -176,7 +168,6 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
         frcst_es <- mu + frcst_sigma * gpd_es * (-1)
 
         # Storing the results of each iteration in a list
-        gpd_quantiles <- c(gpd_quantiles, gpd_quantile)
         VaR <- c(VaR, frcst_var)
         ES <- c(ES, frcst_es)
         }
@@ -185,43 +176,43 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
     mrm_df <- data.frame(cbind(VaR, ES))
 
     # Getting the main descriptive statistics of the results
-    stats_gpd <- c(mean(gpd_quantiles), sd(gpd_quantiles), min(gpd_quantiles), max(gpd_quantiles))
     stats_var <- c(mean(mrm_df$VaR), sd(mrm_df$VaR), min(mrm_df$VaR), max(mrm_df$VaR))
     stats_es <- c(mean(mrm_df$ES), sd(mrm_df$ES), min(mrm_df$ES), max(mrm_df$ES))
 
-    stats_mrm <- data.frame(cbind(stats_gpd, stats_var, stats_es))
+    stats_mrm <- data.frame(cbind(stats_var, stats_es))
 
-    return(list(gpd_quantiles, mrm_df, stats_mrm))
+    return(list(mrm_df, stats_mrm))
     }
 
 # Defining a function for application Li et al (2014) RMSE based method to select threshold
-Li_method <- function(returns, min_threshold, range_length) {
+Li_method <- function(returns) {
 
-    # Making a list of thresholds of length 100 from the initial threshold to the 99.9th percentile
-    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, 0.995), 
-        length.out = range_length)
+    returns <- (returns - mean(returns)) / sd(returns)
+    returns <- returns * (-1)
+    # Making a list of thresholds of length 100 from the 80th to the 99.9th percentile
+    u_seq <- seq(quantile(returns, 0.96), quantile(returns, 0.995), length.out = 100)
 
     # Creating an empty list to store later the RMSE values
     rmse_values <- rep(NA, length(u_seq))
 
     # Iterating over the thresholds
     for (i in seq_along(u_seq)) {
-        # cat("ITERATION NUMBER: ", i,"\n")
+        cat("ITERATION NUMBER: ", i,"\n")
 
-        # For each threshold, calculate exceedances,
+        # For each threholds, calculate exceedances,
         u <- u_seq[i]
         exceedances <- returns[returns > u]
 
         # fitting the gpd to these exceedances
-        # print("Fitting the GPD... \n")
-        # cat("Number of exceedances: ", length(exceedances),"\n")
-        # cat("Threshold: ", u,"\n")
-        gpd_instance <- evir::gpd(data = exceedances,
+        print("Fitting the GPD... \n")
+        cat("Number of exceedances: ", length(exceedances),"\n")
+        cat("Threshold: ", u,"\n")
+        gpd_instance <- gpd(data = returns,
                             threshold = u)
 
         # calculate the fitted values
-        # print("Getting the fitted values...\n")
-        fitted_values <- evir::pgpd(exceedances,
+        print("Getting the fitted values...\n")
+        fitted_values <- pgpd(exceedances,
                               xi = gpd_instance$par.ests["xi"],
                               beta = gpd_instance$par.ests["beta"])
 
@@ -229,13 +220,11 @@ Li_method <- function(returns, min_threshold, range_length) {
         # abline(0,1)
 
         # calculate the Root Mean Squared Error (RMSE)
-        # print("Calculating the RMSE...\n")
+        print("Calculating the RMSE...\n")
         rmse_values[i] <- rmse(ecdf(exceedances)(exceedances), fitted_values)
 
-        print("--------------------------------------------------------------------------------")
         cat("Threshold value: ", u_seq[i],"\n")
         cat("RMSE: ", rmse_values[i],"\n")
-        cat("Number of exceedances: ", length(exceedances),"\n")
         # cat(plot(fitted_values, ecdf(exceedances)(exceedances)), "\n")
     }
 
@@ -251,46 +240,6 @@ Li_method <- function(returns, min_threshold, range_length) {
 
     return(best_u)
     }
-
-# Defining a function for application of V. Choulakian and M. A. Stephens (2001) method based
-# on the Cramer Von Mises and Anderson Darling goodness of fit tests
-Choukalian_method <- function(returns, min_threshold, range_length) {
-
-    p_values <- c()
-    # Making a list of thresholds of length 100 from the initial threshold to the 99.9th percentile
-    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, 0.999), 
-        length.out = range_length)
-
-    print(u_seq)
-    for (i in seq_along(u_seq)) {
-        
-        cat("Iteration number: ", i,"\n")
-
-        # For each threshold, calculate exceedances,
-        u <- u_seq[i]
-        exceedances <- returns[returns > u]
-
-        # Applying the Cramer Von Mises test for the exceedances assuming they follow a GPD
-        cvm_test <- gpdAd(exceedances, bootstrap = TRUE,
-            bootnum = 5, allowParallel = TRUE, numCores = 8)
-        
-        cat("Threshold value: ", u,"\n")
-        cat("p-value: ", cvm_test$p.value,"\n")
-        print(cvm_test)
-
-        # The moment the p-value is greater than 0.1, we stop the search for the threshold
-        # if (cvm_test$p.value >= 0.1) {
-        #     print("We found the optimal threshold before the loop was ended.")
-        #     break
-        # }
-
-    p_values <- c(p_values, cvm_test$p.value)
-    
-    }
-
-    print(ggplot(data.frame(u_seq, p_values), aes(x = u_seq, y = p_values)) +
-        geom_line() + xlab("Thresholds") + ylab("P-values"))
-}
 
 ####################################################################################################
 ################-- BLOCK 2: RETRIEVING, PROCCESSING AND PLOTTING THE DATA --########################
@@ -330,56 +279,49 @@ plot_series(list_of_stocks = all_stocks)
 #########-- BLOCK 3: CALCULATING OPTIMAL THRESHOLDS ACCORDING TO METHODOLOGIES --###################
 ####################################################################################################
 
-# We standarize the returns and multiply by (-1) since we are interested in the extreme losses.
-# Here, we should standarize the returns with conditional sd instead of unconditional sd.
-transformed_returns <- lapply(all_returns, function(x) (x - mean(x)) / sd(x) * (-1))
-
 # Upper 10% rule of DuMounchel
-u_dumounchel <- lapply(transformed_returns, function(x) quantile(x, 0.90))
+u_dumounchel <- lapply(inv_returns, function(x) quantile(x, 0.90))
 
 # Rule of Loretan and Philips (1994) for calculating the optimal threshold
-u_loretan <- lapply(transformed_returns, function(x) quantile(x,
+u_loretan <- lapply(inv_returns, function(x) quantile(x,
                                  1 - (length(x)**(2/3) / log(log(length(x))) / length(x))))
 
 # Ferreira et al. (2003) rule: Extreme values as those above sqrt(n)
-u_ferreira <- lapply(transformed_returns, function(x) quantile(x, 1 - sqrt(length(x)) / length(x)))
+u_ferreira <- lapply(inv_returns, function(x) quantile(x, 1 - sqrt(length(x)) / length(x)))
 
 # Mean Excess Plot or Mean Residual Life Plot
 par(mfrow = c(1, 1))
-lapply(transformed_returns, function(x) print(mrlplot(as.vector(x),
-    tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
-    nt = 20,legend.loc = NULL)))
-
-# Storing the optimal values of the Mean Residual Life Plot manually
-u_mrlplot <- c(1.5, 1.1, 1.3, 1.1, 1.55)
+lapply(inv_returns,
+       function(x) print(mrlplot(as.vector(x),
+                                 tlim = c(quantile(x, 0.8),
+                                          quantile(x, 0.99)),
+                                 nt = 20,
+                                 legend.loc = NULL)))
+u_mrlplot <- c()
 
 # Parameter Stability Plot
 par(mfrow = c(2, 1))
-lapply(transformed_returns, function(x) print(tcplot(as.vector(x),
-    tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
-    nt = 20, legend.loc = NULL)))
-# Storing the optimal values of the Parameter Stability Plot manually
-u_psplot <- c(1.5, 1.2, 1.3, 1.1, 1.55)
+lapply(inv_returns, function(x) print(tcplot(as.vector(x),
+                                             tlim = c(quantile(x, 0.8),
+                                                      quantile(x, 0.99)),
+                                                      nt = 20,
+                                                      legend.loc = NULL)))
+u_psplot <- c()
 
 # Hill Plot
 par(mfrow = c(1, 1))
-lapply(transformed_returns, function(x) print(hillplot(as.vector(x),
-    tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
-    legend.loc = NULL)))
-# Storing the optimal values of the Hill Plot manually
-u_hillplot <- c(1.5, 1.17, 1.29, 1.45, 1.2)
+lapply(inv_returns, function(x) print(hillplot(as.vector(x),
+                                               tlim = c(quantile(x, 0.8),
+                                                        quantile(x, 0.99)))))
+u_hillplot <- c()
 
 # Calling the function Li_rmse above to calculate optimal thresholds for each stock
-u_li_rmse <- lapply(inv_returns, function (x) Li_method(as.vector(x),
-    min_threshold = 0.30, range_length = 100))
-
-# Calling the function Choukalian_method above to calculate optimal thresholds for each stock
-u_choukalian <- Choukalian_method(as.vector(inv_returns[[3]]),
-    min_threshold = 0.95, range_length = 20)
+u_li_rmse <- lapply(all_returns, function (x) Li_method(as.vector(x)))
 
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
-opt_thresholds <- data.frame(cbind(u_ferreira, u_loretan, u_dumounchel,
-    u_li_rmse, u_mrlplot, u_psplot, u_hillplot))
+opt_thresholds <- data.frame(cbind(u_dumounchel, u_loretan,
+                                   u_ferreira, u_li_rmse,
+                                   u_mrlplot, u_psplot, u_hillplot))
 rownames(opt_thresholds) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD", "Crude Oil Brent")
 
 ####################################################################################################
@@ -400,26 +342,24 @@ xlsx_workbook <- createWorkbook()
 # and through the returns series and estimating VaR and ES
 for (j in 1:ncol(opt_thresholds)) {
 
-    cat("Applying methodology ",j,"of ",ncol(opt_thresholds),". \n")
+    cat("Applying methodology ",j,"of ",ncol(opt_thresholds),"). \n")
 
     mrm_data <- list()
     mrm_stats <- list()
-    pareto_quantiles <- list()
     for (i in 1:length(all_returns)) {
         mrm <- market_risk_measure(returns = all_returns[[i]],
                                    threshold_value = as.numeric(opt_thresholds[i, j]),
                                    conf_level = 0.99, 
                                    size_train = 0.75)
         
-        pareto_quantiles <- c(pareto_quantiles, mrm[[1]])
-        mrm_data <- c(mrm_data, mrm[[2]])
-        mrm_stats <- c(mrm_stats, mrm[[3]])
+        mrm_data <- c(mrm_data, mrm[[1]])
+        mrm_stats <- c(mrm_stats, mrm[[2]])
     }
 
     mrm_stats <- data.frame(mrm_stats)
-    colnames(mrm_stats) <- c("Quantiles S&P500", "VaR S&P500", "ES S&P500", "Quantiles BTC/USD", "VaR BTC/USD", "ES BTC/USD",
-        "Quantiles GBP/USD", "VaR GBP/USD", "ES GBP/USD", "Quantiles GOLD/USD", "VaR GOLD/USD", "ES GOLD/USD",
-        "Quantiles Crude Oil Brent", "VaR Crude Oil Brent", "ES Crude Oil Brent")
+    colnames(mrm_stats) <- c("VaR SP&500", "ES SP&500", "VaR BTC/USD", "ES BTC/USD",
+                            "VaR GBP/USD", "ES GBP/USD", "VaR GOLD/USD", "ES GOLD/USD",
+                            "VaR Crude Oil Brent", "ES Crude Oil Brent")
     rownames(mrm_stats) <- c("Mean", "SD", "Min", "Max")
 
     addWorksheet(xlsx_workbook, sheetName = colnames(opt_thresholds)[j])
@@ -429,7 +369,7 @@ for (j in 1:ncol(opt_thresholds)) {
     saveWorkbook(xlsx_workbook,
                  file = "/Users/juancordero/Desktop/My_GitHub/Master_Research/Output/results.xlsx",
                  overwrite = TRUE)
-}
 
-end_time <- Sys.time()
-cat("It took ", (end_time - start_time) / 60, " minutes to run the code. \n")
+    end_time <- Sys.time()
+    cat("It took ", (end_time - start_time) / 60, " minutes to run the code. \n")
+}

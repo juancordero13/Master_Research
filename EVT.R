@@ -195,10 +195,10 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
     }
 
 # Defining a function for application Li et al (2014) RMSE based method to select threshold
-Li_method <- function(returns, min_threshold, range_length) {
+Li_method <- function(returns, min_threshold, range_length, max_threshold) {
 
     # Making a list of thresholds of length 100 from the initial threshold to the 99.9th percentile
-    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, 0.995), 
+    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, max_threshold), 
         length.out = range_length)
 
     # Creating an empty list to store later the RMSE values
@@ -254,11 +254,11 @@ Li_method <- function(returns, min_threshold, range_length) {
 
 # Defining a function for application of V. Choulakian and M. A. Stephens (2001) method based
 # on the Cramer Von Mises and Anderson Darling goodness of fit tests
-Choukalian_method <- function(returns, min_threshold, range_length) {
+Choukalian_method <- function(returns, min_threshold, range_length, max_threshold) {
 
     p_values <- c()
     # Making a list of thresholds of length 100 from the initial threshold to the 99.9th percentile
-    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, 0.999), 
+    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, max_threshold), 
         length.out = range_length)
 
     print(u_seq)
@@ -271,23 +271,26 @@ Choukalian_method <- function(returns, min_threshold, range_length) {
         exceedances <- returns[returns > u]
 
         # Applying the Cramer Von Mises test for the exceedances assuming they follow a GPD
-        cvm_test <- gpdAd(exceedances, bootstrap = TRUE,
+        cvm_test <- gpdCvm(exceedances, bootstrap = TRUE,
             bootnum = 5, allowParallel = TRUE, numCores = 8)
         
         cat("Threshold value: ", u,"\n")
         cat("p-value: ", cvm_test$p.value,"\n")
         print(cvm_test)
 
+        # This does not make sense at the moment as p-values are highly unpredictable
         # The moment the p-value is greater than 0.1, we stop the search for the threshold
         # if (cvm_test$p.value >= 0.1) {
         #     print("We found the optimal threshold before the loop was ended.")
         #     break
         # }
 
+    # Getting the p-values for each threshold
     p_values <- c(p_values, cvm_test$p.value)
     
     }
 
+    # Plotting the p-values against the range of threholds
     print(ggplot(data.frame(u_seq, p_values), aes(x = u_seq, y = p_values)) +
         geom_line() + xlab("Thresholds") + ylab("P-values"))
 }
@@ -374,12 +377,12 @@ u_li_rmse <- lapply(inv_returns, function (x) Li_method(as.vector(x),
     min_threshold = 0.30, range_length = 100))
 
 # Calling the function Choukalian_method above to calculate optimal thresholds for each stock
-u_choukalian <- Choukalian_method(as.vector(inv_returns[[3]]),
-    min_threshold = 0.95, range_length = 20)
+u_choukalian <- Choukalian_method(river_data, min_threshold = 0.00,
+    range_length = 20, max_threshold = 0.99)
 
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
 opt_thresholds <- data.frame(cbind(u_ferreira, u_loretan, u_dumounchel,
-    u_li_rmse, u_mrlplot, u_psplot, u_hillplot))
+    u_li_rmse, u_mrlplot, u_psplot, u_hillplot, u_choukalian))
 rownames(opt_thresholds) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD", "Crude Oil Brent")
 
 ####################################################################################################

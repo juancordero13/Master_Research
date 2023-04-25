@@ -22,6 +22,7 @@ install_if_missing("purrr")
 install_if_missing("ggplot2")
 install_if_missing("ggthemes")
 install_if_missing("eva")
+install_if_missing("goftest")
 
 # Loading the necessary libraries
 library(quantmod)
@@ -38,6 +39,7 @@ library(ggplot2)
 library(ggthemes)
 library(Metrics)
 library(eva)
+library(goftest)
 
 
 ####################################################################################################
@@ -210,7 +212,7 @@ Li_method <- function(returns, min_threshold, range_length, max_threshold) {
 
         # For each threshold, calculate exceedances,
         u <- u_seq[i]
-        exceedances <- returns[returns > u]
+        exceedances <- returns[returns > u] - u
 
         # fitting the gpd to these exceedances
         # print("Fitting the GPD... \n")
@@ -254,44 +256,51 @@ Li_method <- function(returns, min_threshold, range_length, max_threshold) {
 
 # Defining a function for application of V. Choulakian and M. A. Stephens (2001) method based
 # on the Cramer Von Mises and Anderson Darling goodness of fit tests
-Choukalian_method <- function(returns, min_threshold, range_length, max_threshold) {
+Choukalian_method <- function(returns) {
 
     p_values <- c()
-    # Making a list of thresholds of length 100 from the initial threshold to the 99.9th percentile
-    u_seq <- seq(quantile(returns, min_threshold), quantile(returns, max_threshold), 
-        length.out = range_length)
-
-    print(u_seq)
-    for (i in seq_along(u_seq)) {
+    p_value <- 0
+    u <- 0
+    list_u <- c()
+    while (TRUE) {
         
-        cat("Iteration number: ", i,"\n")
+        exceedances <- returns[returns > u] - u
+        if (p_value > 0.1) {
+            print("We found the optimal threshold before the loop was ended.")
+            break
+        } else {
 
-        # For each threshold, calculate exceedances,
-        u <- u_seq[i]
-        exceedances <- returns[returns > u]
+            # For each threshold, calculate exceedances,
+            exceedances <- returns[returns > u] - u
 
-        # Applying the Cramer Von Mises test for the exceedances assuming they follow a GPD
-        cvm_test <- gpdCvm(exceedances, bootstrap = TRUE,
-            bootnum = 5, allowParallel = TRUE, numCores = 8)
+            # Applying the Cramer Von Mises test for the exceedances assuming they follow a GPD
+            cvm_test <- gpdCvm(exceedances)
+
+            p_value <- cvm_test$p.value
         
-        cat("Threshold value: ", u,"\n")
-        cat("p-value: ", cvm_test$p.value,"\n")
-        print(cvm_test)
+            cat("Threshold value: ", u,"\n")
+            cat("p-value: ", p_value,"\n")
+            cat("Number of exceedances: ", length(exceedances),"\n")
+            print(cvm_test)
 
-        # This does not make sense at the moment as p-values are highly unpredictable
-        # The moment the p-value is greater than 0.1, we stop the search for the threshold
-        # if (cvm_test$p.value >= 0.1) {
-        #     print("We found the optimal threshold before the loop was ended.")
-        #     break
-        # }
+            # This does not make sense at the moment as p-values are highly unpredictable
+            # The moment the p-value is greater than 0.1, we stop the search for the threshold
+            # if (cvm_test$p.value >= 0.1) {
+            #     print("We found the optimal threshold before the loop was ended.")
+            #     break
+            # }
 
-    # Getting the p-values for each threshold
-    p_values <- c(p_values, cvm_test$p.value)
+            # Getting the p-values for each threshold
+            p_values <- c(p_values, p_value)
+            list_u <- c(list_u, u)
+
+            u <- u + (min(exceedances) - u)
+        }
     
     }
 
     # Plotting the p-values against the range of threholds
-    print(ggplot(data.frame(u_seq, p_values), aes(x = u_seq, y = p_values)) +
+    print(ggplot(data.frame(list_u, p_values), aes(x = list_u, y = p_values)) +
         geom_line() + xlab("Thresholds") + ylab("P-values"))
 }
 
@@ -373,12 +382,20 @@ lapply(transformed_returns, function(x) print(hillplot(as.vector(x),
 u_hillplot <- c(1.5, 1.17, 1.29, 1.45, 1.2)
 
 # Calling the function Li_rmse above to calculate optimal thresholds for each stock
-u_li_rmse <- lapply(inv_returns, function (x) Li_method(as.vector(x),
-    min_threshold = 0.30, range_length = 100))
+u_li_rmse <- lapply(transformed_returns, function (x) Li_method(as.vector(x),
+    min_threshold = 0.7, max_threshold = 0.98, range_length = 100))
+
+# Defining river data to test Choukalian's method
+river_data <- c(1.7, 2.2, 14.4, 1.1, 0.4, 20.6, 5.3,
+0.7, 1.9, 13, 12, 9.3, 1.4, 18.7, 8.5, 25.5, 11.6, 14.1,
+22.1, 1.1, 2.5, 14.4, 1.7, 37.6, 0.6, 2.2, 39, 0.3, 15,
+11, 7.3, 22.9, 1.7, 0.1, 1.1, 0.6, 9, 1.7, 7, 20.1, 0.4,
+2.8, 14.1, 9.9, 10.4, 10.7, 30, 3.6, 5.6, 30.8, 13.3,
+4.2, 25.5, 3.4, 11.9, 21.5, 27.6, 36.4, 2.7, 64, 1.5, 2.5,
+27.4, 1, 27.1, 20.2, 16.8, 5.3, 9.7, 27.5, 2.5, 27)
 
 # Calling the function Choukalian_method above to calculate optimal thresholds for each stock
-u_choukalian <- Choukalian_method(river_data, min_threshold = 0.00,
-    range_length = 20, max_threshold = 0.99)
+u_choukalian <- Choukalian_method(inv_returns[[1]])
 
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
 opt_thresholds <- data.frame(cbind(u_ferreira, u_loretan, u_dumounchel,
@@ -410,9 +427,8 @@ for (j in 1:ncol(opt_thresholds)) {
     pareto_quantiles <- list()
     for (i in 1:length(all_returns)) {
         mrm <- market_risk_measure(returns = all_returns[[i]],
-                                   threshold_value = as.numeric(opt_thresholds[i, j]),
-                                   conf_level = 0.99, 
-                                   size_train = 0.75)
+            threshold_value = as.numeric(opt_thresholds[i, j]), conf_level = 0.99, 
+            size_train = 0.75)
         
         pareto_quantiles <- c(pareto_quantiles, mrm[[1]])
         mrm_data <- c(mrm_data, mrm[[2]])

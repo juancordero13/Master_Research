@@ -23,6 +23,7 @@ install_if_missing("ggplot2")
 install_if_missing("ggthemes")
 install_if_missing("eva")
 install_if_missing("goftest")
+install_if_missing("quarks")
 
 # Loading the necessary libraries
 library(quantmod)
@@ -40,7 +41,7 @@ library(ggthemes)
 library(Metrics)
 library(eva)
 library(goftest)
-
+library(quarks)
 
 ####################################################################################################
 ###########################-- BLOCK 1: DEFINING FUNCTIONS --########################################
@@ -96,6 +97,26 @@ desc_stats <- function(returns) {
 
     return(desc_stats)
     }
+
+# Defining a function to standarize the series by subtracting the mean and dividing by
+# subtracting the mean and dividing by the conditional standard deviation
+conditional_standarization <- function(returns, aparch = FALSE) {
+
+    # Using an EWMA to estimate the conditional standard deviation
+    if (aparch) {
+        aparch_model <- garchFit(~aparch(1,1), data = returns, cond.dist = c("norm"),
+            trace = FALSE)
+        volatility <- volatility(aparch_model)
+    } else {
+        volatility <- ewma(returns)
+    }
+
+    # Standarizing the returns
+    standarized_returns <- (returns - mean(returns)) / volatility
+
+    # Returning the standarized returns
+    return(standarized_returns)
+}
 
 # Defining a function for calculating VaR and ES
 # The function also calculate the GPD quantiles obtained for each optimal threshold value
@@ -219,13 +240,13 @@ Li_method <- function(returns, min_threshold, range_length, max_threshold) {
         # cat("Number of exceedances: ", length(exceedances),"\n")
         # cat("Threshold: ", u,"\n")
         gpd_instance <- evir::gpd(data = exceedances,
-                            threshold = u)
+            threshold = u)
 
         # calculate the fitted values
         # print("Getting the fitted values...\n")
         fitted_values <- evir::pgpd(exceedances,
-                              xi = gpd_instance$par.ests["xi"],
-                              beta = gpd_instance$par.ests["beta"])
+            xi = gpd_instance$par.ests["xi"],
+            beta = gpd_instance$par.ests["beta"])
 
         # print(qqplot(exceedances, fitted_values))
         # abline(0,1)
@@ -256,15 +277,17 @@ Li_method <- function(returns, min_threshold, range_length, max_threshold) {
 
 # Defining a function for application of V. Choulakian and M. A. Stephens (2001) method based
 # on the Cramer Von Mises and Anderson Darling goodness of fit tests
-Choukalian_method <- function(returns) {
+Choukalian_method <- function(returns, initial_threshold) {
 
     p_values <- c()
     p_value <- 0
-    u <- 0
+    u <- quantile(returns, initial_threshold)
     list_u <- c()
     while (TRUE) {
         
-        exceedances <- returns[returns > u] - u
+        extreme_returns <- returns[returns > u]
+
+        exceedances <- extreme_returns - u
         if (p_value > 0.1) {
             print("We found the optimal threshold before the loop was ended.")
             break
@@ -277,11 +300,12 @@ Choukalian_method <- function(returns) {
             cvm_test <- gpdCvm(exceedances)
 
             p_value <- cvm_test$p.value
-        
+
             cat("Threshold value: ", u,"\n")
             cat("p-value: ", p_value,"\n")
             cat("Number of exceedances: ", length(exceedances),"\n")
-            print(cvm_test)
+            cat("--------------------------------------------------------------------------------\n")
+            # print(cvm_test)
 
             # This does not make sense at the moment as p-values are highly unpredictable
             # The moment the p-value is greater than 0.1, we stop the search for the threshold
@@ -294,7 +318,7 @@ Choukalian_method <- function(returns) {
             p_values <- c(p_values, p_value)
             list_u <- c(list_u, u)
 
-            u <- u + (min(exceedances) - u)
+            u <- u + (min(extreme_returns) - u)
         }
     
     }
@@ -302,7 +326,9 @@ Choukalian_method <- function(returns) {
     # Plotting the p-values against the range of threholds
     print(ggplot(data.frame(list_u, p_values), aes(x = list_u, y = p_values)) +
         geom_line() + xlab("Thresholds") + ylab("P-values"))
-}
+
+    return(u)
+    }
 
 ####################################################################################################
 ################-- BLOCK 2: RETRIEVING, PROCCESSING AND PLOTTING THE DATA --########################
@@ -327,6 +353,10 @@ all_returns <- lapply(all_stocks, function(x) na.omit(diff(log(x)) * 100))
 # Also, since we are interested in the extreme losses, we multiply the returns by (-1)
 inv_returns <- lapply(all_returns, function(x) x * (-1))
 
+# We standarize the returns and multiply by (-1) since we are interested in the extreme losses.
+# Here, we should standarize the returns with conditional sd instead of unconditional sd.
+transformed_returns <- lapply(all_returns, function(x) conditional_standarization(as.vector(x), aparch = FALSE))
+
 # Calculate main descriptive statistics for the returns series
 descriptive_stats <- data.frame()
 for (returns in all_returns) {
@@ -341,10 +371,6 @@ plot_series(list_of_stocks = all_stocks)
 ####################################################################################################
 #########-- BLOCK 3: CALCULATING OPTIMAL THRESHOLDS ACCORDING TO METHODOLOGIES --###################
 ####################################################################################################
-
-# We standarize the returns and multiply by (-1) since we are interested in the extreme losses.
-# Here, we should standarize the returns with conditional sd instead of unconditional sd.
-transformed_returns <- lapply(all_returns, function(x) (x - mean(x)) / sd(x) * (-1))
 
 # Upper 10% rule of DuMounchel
 u_dumounchel <- lapply(transformed_returns, function(x) quantile(x, 0.90))
@@ -363,7 +389,7 @@ lapply(transformed_returns, function(x) print(mrlplot(as.vector(x),
     nt = 20,legend.loc = NULL)))
 
 # Storing the optimal values of the Mean Residual Life Plot manually
-u_mrlplot <- c(1.5, 1.1, 1.3, 1.1, 1.55)
+u_mrlplot <- c(1.45, 0.38, 1.3, 4.4, 1.8)
 
 # Parameter Stability Plot
 par(mfrow = c(2, 1))
@@ -371,7 +397,7 @@ lapply(transformed_returns, function(x) print(tcplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
     nt = 20, legend.loc = NULL)))
 # Storing the optimal values of the Parameter Stability Plot manually
-u_psplot <- c(1.5, 1.2, 1.3, 1.1, 1.55)
+u_psplot <- c(1.45, 0.53, 4.5, 2, 0.7)
 
 # Hill Plot
 par(mfrow = c(1, 1))
@@ -379,23 +405,22 @@ lapply(transformed_returns, function(x) print(hillplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
     legend.loc = NULL)))
 # Storing the optimal values of the Hill Plot manually
-u_hillplot <- c(1.5, 1.17, 1.29, 1.45, 1.2)
+u_hillplot <- c(1.38, 0.55, 2.84, 1.4, 1)
 
 # Calling the function Li_rmse above to calculate optimal thresholds for each stock
 u_li_rmse <- lapply(transformed_returns, function (x) Li_method(as.vector(x),
-    min_threshold = 0.7, max_threshold = 0.98, range_length = 100))
+    min_threshold = 0.8, max_threshold = 0.97, range_length = 100))
 
-# Defining river data to test Choukalian's method
-river_data <- c(1.7, 2.2, 14.4, 1.1, 0.4, 20.6, 5.3,
-0.7, 1.9, 13, 12, 9.3, 1.4, 18.7, 8.5, 25.5, 11.6, 14.1,
-22.1, 1.1, 2.5, 14.4, 1.7, 37.6, 0.6, 2.2, 39, 0.3, 15,
-11, 7.3, 22.9, 1.7, 0.1, 1.1, 0.6, 9, 1.7, 7, 20.1, 0.4,
-2.8, 14.1, 9.9, 10.4, 10.7, 30, 3.6, 5.6, 30.8, 13.3,
-4.2, 25.5, 3.4, 11.9, 21.5, 27.6, 36.4, 2.7, 64, 1.5, 2.5,
-27.4, 1, 27.1, 20.2, 16.8, 5.3, 9.7, 27.5, 2.5, 27)
+# Defining manually river data to test Choukalian's method
+# river_data <- c(1.7, 2.2, 14.4, 1.1, 0.4, 20.6, 5.3, 0.7, 1.9, 13, 12, 9.3, 1.4,
+# 18.7, 8.5, 25.5, 11.6, 14.1, 22.1, 1.1, 2.5, 14.4, 1.7, 37.6, 0.6, 2.2, 39, 0.3, 15,
+# 11, 7.3, 22.9, 1.7, 0.1, 1.1, 0.6, 9, 1.7, 7, 20.1, 0.4, 2.8, 14.1, 9.9, 10.4, 10.7, 30,
+# 3.6, 5.6, 30.8, 13.3, 4.2, 25.5, 3.4, 11.9, 21.5, 27.6, 36.4, 2.7, 64, 1.5, 2.5,
+# 27.4, 1, 27.1, 20.2, 16.8, 5.3, 9.7, 27.5, 2.5, 27)
 
 # Calling the function Choukalian_method above to calculate optimal thresholds for each stock
-u_choukalian <- Choukalian_method(inv_returns[[1]])
+u_choukalian <- lapply(transformed_returns, function (x) Choukalian_method(as.vector(x),
+    initial_threshold = 0.8))
 
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
 opt_thresholds <- data.frame(cbind(u_ferreira, u_loretan, u_dumounchel,

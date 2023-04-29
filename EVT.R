@@ -25,7 +25,6 @@ install_if_missing("eva")
 install_if_missing("goftest")
 install_if_missing("quarks")
 install_if_missing("xts")
-install_if_missing("parallel")
 
 # Loading the necessary libraries
 library(quantmod)
@@ -45,7 +44,6 @@ library(eva)
 library(goftest)
 library(quarks)
 library(xts)
-library(parallel)
 
 ####################################################################################################
 ###########################-- BLOCK 1: DEFINING FUNCTIONS --########################################
@@ -111,7 +109,7 @@ conditional_standarization <- function(returns, aparch = FALSE) {
 
     # Using an EWMA to estimate the conditional standard deviation
     if (aparch) {
-        aparch_model <- garchFit(~aparch(1,1), data = returns, cond.dist = c("std"),
+        aparch_model <- garchFit(~aparch(1,1), data = returns, cond.dist = c("sstd"),
             trace = FALSE)
 
         mu <- coef(aparch_model)[1]
@@ -152,10 +150,10 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
     # Looping over the returns
     for(j in 0:(outsample - 1)) {
 
-        print(paste0("Iteration ", j+1, " of ", outsample, " iterations"))
+        print(paste0("Iteration ", j+1, " of ", outsample, " iterations."))
 
         # Training set that will be used in this iteration
-        return_train <- returns[(1+j):(insample+j)]
+        return_train <- as.vector(returns[(1+j):(insample+j)])
 
         # Fitting an APARCH(1,1) model to the training set
         # Using as a conditional distribution the normal distribution
@@ -179,10 +177,6 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
         sigmas <- volatility(aparch_fit)
         # Conditional sd for the last observation
         sigma_t <- sigmas[insample]
-
-        # Plotting the conditional volatility of the model
-        # plot(sigmas, type = "l", main = "Conditional volatility of the APARCH(1,1) model",
-        #     xlab = "Time", ylab = "Conditional volatility")
 
         # Forecasting the conditional volatility of the model one day ahead
         frcst_sigma <- (omega + 
@@ -344,7 +338,7 @@ brent_usd <- `BZ=F`$`BZ=F.Adjusted`
 
 # Getting flow data of the spanish river Ebro from 2000-10-01 to 2019-09-30
 # obtained from CEDEX (Centro de Estudios y Experimentación de Obras Públicas)
-ebro_flow <- read.csv("/Users/juancordero/Desktop/My_GitHub/Master_Research/Input/caudal_ebro.csv",
+ebro_flow <- read.csv("/Users/juancordero/Desktop/Master_Research/Input/caudal_ebro.csv",
     header = TRUE, sep = ",")
 ebro_flow <- ebro_flow[, c(2, 4)]
 
@@ -353,7 +347,7 @@ ebro_flow$date <- as.Date(ebro_flow$date, format = "%d/%m/%Y")
 ebro_flow <- xts(ebro_flow$flow, order.by = ebro_flow$date)
 
 # Building a list with all the series of stocks to iterate over
-all_stocks <- list(sp500, btc_usd, gbp_usd, gold_usd, brent_usd, ebro_flow)
+all_stocks <- list(sp500, btc_usd, gbp_usd, gold_usd, brent_usd)
 
 # Also building a list with all the returns series (log differences)
 all_returns <- lapply(all_stocks, function(x) na.omit(diff(log(x)) * 100))
@@ -372,7 +366,7 @@ for (returns in all_returns) {
     descriptive_stats <- rbind(descriptive_stats, desc_stats(returns))
 }
 rownames(descriptive_stats) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD",
-    "Crude Oil Brent", "Ebro River Flow")
+    "Crude Oil Brent")
 print(formattable(descriptive_stats))
 
 # Plotting stocks over time, returns over time and histogram of returns for all series
@@ -399,7 +393,7 @@ lapply(transformed_returns, function(x) print(mrlplot(as.vector(x),
     nt = 20)))
 
 # Storing the optimal values of the Mean Residual Life Plot manually
-u_mrlplot <- c(1.3, 0.85, 1.2, 1.2, 1.2, 0.94)
+u_mrlplot <- c(1.3, 1, 1.2, 1.2, 1.2)
 
 # Parameter Stability Plot
 par(mfrow = c(2, 1))
@@ -407,14 +401,14 @@ lapply(transformed_returns, function(x) print(tcplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
     nt = 20)))
 # Storing the optimal values of the Parameter Stability Plot manually
-u_psplot <- c(1.3, 0.85, 1.2, 1.2, 1.2, 0.94)
+u_psplot <- c(1.3, 1, 1.2, 1.2, 1.2)
 
 # Hill Plot
 par(mfrow = c(1, 1))
 lapply(transformed_returns, function(x) print(hillplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)))))
 # Storing the optimal values of the Hill Plot manually
-u_hillplot <- c(1.8, 1.3, 1.6, 1.6, 1.7, 1.1)
+u_hillplot <- c(1.7, 1.6, 1.6, 1.6, 1.7)
 
 # Calling the function Li_rmse above to calculate optimal thresholds for each stock
 u_li_rmse <- lapply(transformed_returns, function (x) Li_method(as.vector(x),
@@ -425,11 +419,26 @@ u_choukalian <- lapply(transformed_returns, function (x) Choukalian_method(as.ve
     initial_threshold = 0.8))
 
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
-opt_thresholds <- data.frame(cbind(u_ferreira, u_loretan, u_dumounchel,
-    u_li_rmse, u_mrlplot, u_psplot, u_hillplot, u_choukalian))
+opt_thresholds <- data.frame(cbind(u_dumounchel, u_ferreira, u_loretan,
+    u_mrlplot, u_psplot, u_hillplot, u_li_rmse, u_choukalian))
+opt_thresholds <- data.frame(lapply(opt_thresholds, as.numeric))
 rownames(opt_thresholds) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD",
-    "Crude Oil Brent", "Ebro River Flow")
+    "Crude Oil Brent")
 print(formattable(opt_thresholds))
+
+# Also storing the optimal thresholds in terms of percentiles
+opt_percentiles <- opt_thresholds
+for (method in 1:ncol(opt_percentiles)) {
+    for (serie in 1:nrow(opt_percentiles)) {
+        stock <- transformed_returns[[serie]]
+        opt_value <- opt_percentiles[serie, method]
+        opt_percentiles[serie, method] <- round(length(stock[stock <= opt_value])
+            / length(stock), 3)
+    }
+}
+rownames(opt_percentiles) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD",
+    "Crude Oil Brent")
+print(formattable(opt_percentiles))
 
 ####################################################################################################
 ############-- BLOCK 4: ESTIMATING MARKET RISK MEASURES FOR EACH THRESHOLD --#######################
@@ -467,8 +476,7 @@ for (j in 1:ncol(opt_thresholds)) {
     mrm_stats <- data.frame(mrm_stats)
     colnames(mrm_stats) <- c("Quantiles S&P500", "VaR S&P500", "ES S&P500", "Quantiles BTC/USD", "VaR BTC/USD", "ES BTC/USD",
         "Quantiles GBP/USD", "VaR GBP/USD", "ES GBP/USD", "Quantiles GOLD/USD", "VaR GOLD/USD", "ES GOLD/USD",
-        "Quantiles Crude Oil Brent", "VaR Crude Oil Brent", "ES Crude Oil Brent", "Quantiles Ebro River Flow",
-        "VaR Ebro River Flow", "ES Ebro River Flow")
+        "Quantiles Crude Oil Brent", "VaR Crude Oil Brent", "ES Crude Oil Brent")
     rownames(mrm_stats) <- c("Mean", "SD", "Min", "Max")
 
     addWorksheet(xlsx_workbook, sheetName = colnames(opt_thresholds)[j])
@@ -488,7 +496,7 @@ cat("It took ", (end_time - start_time) / 60, " minutes to run the code. \n")
 ####################################################################################################
 
 # Test to select inicial threshold value for iterations
-test <- transformed_returns[[4]]
+test <- (ebro_flow - mean(ebro_flow)) / sd(ebro_flow)
 u_seq <- seq(0, 0.999, length.out = 1000)
 
 for (perc in u_seq) {

@@ -24,6 +24,8 @@ install_if_missing("ggthemes")
 install_if_missing("eva")
 install_if_missing("goftest")
 install_if_missing("quarks")
+install_if_missing("xts")
+install_if_missing("parallel")
 
 # Loading the necessary libraries
 library(quantmod)
@@ -42,6 +44,8 @@ library(Metrics)
 library(eva)
 library(goftest)
 library(quarks)
+library(xts)
+library(parallel)
 
 ####################################################################################################
 ###########################-- BLOCK 1: DEFINING FUNCTIONS --########################################
@@ -102,17 +106,22 @@ desc_stats <- function(returns) {
 # subtracting the mean and dividing by the conditional standard deviation
 conditional_standarization <- function(returns, aparch = FALSE) {
 
+    # Multiply for (-1) because we are interested in the extreme losses
+    returns <- returns * (-1)
+
     # Using an EWMA to estimate the conditional standard deviation
     if (aparch) {
-        aparch_model <- garchFit(~aparch(1,1), data = returns, cond.dist = c("norm"),
+        aparch_model <- garchFit(~aparch(1,1), data = returns, cond.dist = c("std"),
             trace = FALSE)
+
+        mu <- coef(aparch_model)[1]
         volatility <- volatility(aparch_model)
+
+        standarized_returns <- (returns - mu) / volatility
     } else {
         volatility <- ewma(returns)
+        standarized_returns <- (returns - mean(returns)) / volatility
     }
-
-    # Standarizing the returns
-    standarized_returns <- (returns - mean(returns)) / volatility
 
     # Returning the standarized returns
     return(standarized_returns)
@@ -150,7 +159,7 @@ market_risk_measure <- function(returns, conf_level, size_train, threshold_value
 
         # Fitting an APARCH(1,1) model to the training set
         # Using as a conditional distribution the normal distribution
-        aparch_fit <- garchFit(~aparch(1,1), data = return_train, cond.dist = c("norm"),
+        aparch_fit <- garchFit(~aparch(1,1), data = return_train, cond.dist = c("std"),
             trace = FALSE)
 
         # Storing the parameters of the fitted model
@@ -233,15 +242,14 @@ Li_method <- function(returns, min_threshold, range_length, max_threshold) {
 
         # For each threshold, calculate exceedances,
         u <- u_seq[i]
-        exceedances <- returns[returns > u] - u
 
         # fitting the gpd to these exceedances
         # print("Fitting the GPD... \n")
         # cat("Number of exceedances: ", length(exceedances),"\n")
         # cat("Threshold: ", u,"\n")
-        gpd_instance <- evir::gpd(data = exceedances,
-            threshold = u)
+        gpd_instance <- evir::gpd(data = returns, threshold = u)
 
+        exceedances <- returns[returns > u] - u
         # calculate the fitted values
         # print("Getting the fitted values...\n")
         fitted_values <- evir::pgpd(exceedances,
@@ -284,40 +292,30 @@ Choukalian_method <- function(returns, initial_threshold) {
     u <- quantile(returns, initial_threshold)
     list_u <- c()
     while (TRUE) {
-        
-        extreme_returns <- returns[returns > u]
 
-        exceedances <- extreme_returns - u
+        # Calculate the returns above the threshold
+        extreme_returns <- returns[returns > u]
+        # For each threshold, calculate exceedances
+        exceedances <- returns[returns > u] - u
+
+        # Applying the Cramer Von Mises test for the exceedances assuming they follow a GPD
+        cvm_test <- gpdCvm(exceedances)
+
+        p_value <- cvm_test$p.value
+
+        cat("Threshold value: ", u,"\n")
+        cat("p-value: ", p_value,"\n")
+        cat("Number of exceedances: ", length(exceedances),"\n")
+        cat("--------------------------------------------------------------------------------\n")
+
+        # Getting the p-values for each threshold
+        p_values <- c(p_values, p_value)
+        list_u <- c(list_u, u)
+
         if (p_value > 0.1) {
             print("We found the optimal threshold before the loop was ended.")
             break
         } else {
-
-            # For each threshold, calculate exceedances,
-            exceedances <- returns[returns > u] - u
-
-            # Applying the Cramer Von Mises test for the exceedances assuming they follow a GPD
-            cvm_test <- gpdCvm(exceedances)
-
-            p_value <- cvm_test$p.value
-
-            cat("Threshold value: ", u,"\n")
-            cat("p-value: ", p_value,"\n")
-            cat("Number of exceedances: ", length(exceedances),"\n")
-            cat("--------------------------------------------------------------------------------\n")
-            # print(cvm_test)
-
-            # This does not make sense at the moment as p-values are highly unpredictable
-            # The moment the p-value is greater than 0.1, we stop the search for the threshold
-            # if (cvm_test$p.value >= 0.1) {
-            #     print("We found the optimal threshold before the loop was ended.")
-            #     break
-            # }
-
-            # Getting the p-values for each threshold
-            p_values <- c(p_values, p_value)
-            list_u <- c(list_u, u)
-
             u <- u + (min(extreme_returns) - u)
         }
     
@@ -344,8 +342,18 @@ gbp_usd <- `GBPUSD=X`$`GBPUSD=X.Adjusted`
 gold_usd <- `GC=F`$`GC=F.Adjusted`
 brent_usd <- `BZ=F`$`BZ=F.Adjusted`
 
+# Getting flow data of the spanish river Ebro from 2000-10-01 to 2019-09-30
+# obtained from CEDEX (Centro de Estudios y Experimentación de Obras Públicas)
+ebro_flow <- read.csv("/Users/juancordero/Desktop/My_GitHub/Master_Research/Input/caudal_ebro.csv",
+    header = TRUE, sep = ",")
+ebro_flow <- ebro_flow[, c(2, 4)]
+
+# Converting the dataframe to xts object for further processing
+ebro_flow$date <- as.Date(ebro_flow$date, format = "%d/%m/%Y")
+ebro_flow <- xts(ebro_flow$flow, order.by = ebro_flow$date)
+
 # Building a list with all the series of stocks to iterate over
-all_stocks <- list(sp500, btc_usd, gbp_usd, gold_usd, brent_usd)
+all_stocks <- list(sp500, btc_usd, gbp_usd, gold_usd, brent_usd, ebro_flow)
 
 # Also building a list with all the returns series (log differences)
 all_returns <- lapply(all_stocks, function(x) na.omit(diff(log(x)) * 100))
@@ -355,14 +363,16 @@ inv_returns <- lapply(all_returns, function(x) x * (-1))
 
 # We standarize the returns and multiply by (-1) since we are interested in the extreme losses.
 # Here, we should standarize the returns with conditional sd instead of unconditional sd.
-transformed_returns <- lapply(all_returns, function(x) conditional_standarization(as.vector(x), aparch = FALSE))
+transformed_returns <- lapply(all_returns, function(x) conditional_standarization(x,
+    aparch = TRUE))
 
 # Calculate main descriptive statistics for the returns series
 descriptive_stats <- data.frame()
 for (returns in all_returns) {
     descriptive_stats <- rbind(descriptive_stats, desc_stats(returns))
 }
-rownames(descriptive_stats) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD", "Crude Oil Brent")
+rownames(descriptive_stats) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD",
+    "Crude Oil Brent", "Ebro River Flow")
 print(formattable(descriptive_stats))
 
 # Plotting stocks over time, returns over time and histogram of returns for all series
@@ -377,7 +387,7 @@ u_dumounchel <- lapply(transformed_returns, function(x) quantile(x, 0.90))
 
 # Rule of Loretan and Philips (1994) for calculating the optimal threshold
 u_loretan <- lapply(transformed_returns, function(x) quantile(x,
-                                 1 - (length(x)**(2/3) / log(log(length(x))) / length(x))))
+    1 - (length(x)**(2/3) / log(log(length(x))) / length(x))))
 
 # Ferreira et al. (2003) rule: Extreme values as those above sqrt(n)
 u_ferreira <- lapply(transformed_returns, function(x) quantile(x, 1 - sqrt(length(x)) / length(x)))
@@ -386,37 +396,29 @@ u_ferreira <- lapply(transformed_returns, function(x) quantile(x, 1 - sqrt(lengt
 par(mfrow = c(1, 1))
 lapply(transformed_returns, function(x) print(mrlplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
-    nt = 20,legend.loc = NULL)))
+    nt = 20)))
 
 # Storing the optimal values of the Mean Residual Life Plot manually
-u_mrlplot <- c(1.45, 0.38, 1.3, 4.4, 1.8)
+u_mrlplot <- c(1.3, 0.85, 1.2, 1.2, 1.2, 0.94)
 
 # Parameter Stability Plot
 par(mfrow = c(2, 1))
 lapply(transformed_returns, function(x) print(tcplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
-    nt = 20, legend.loc = NULL)))
+    nt = 20)))
 # Storing the optimal values of the Parameter Stability Plot manually
-u_psplot <- c(1.45, 0.53, 4.5, 2, 0.7)
+u_psplot <- c(1.3, 0.85, 1.2, 1.2, 1.2, 0.94)
 
 # Hill Plot
 par(mfrow = c(1, 1))
 lapply(transformed_returns, function(x) print(hillplot(as.vector(x),
-    tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
-    legend.loc = NULL)))
+    tlim = c(quantile(x, 0.8), quantile(x, 0.99)))))
 # Storing the optimal values of the Hill Plot manually
-u_hillplot <- c(1.38, 0.55, 2.84, 1.4, 1)
+u_hillplot <- c(1.8, 1.3, 1.6, 1.6, 1.7, 1.1)
 
 # Calling the function Li_rmse above to calculate optimal thresholds for each stock
 u_li_rmse <- lapply(transformed_returns, function (x) Li_method(as.vector(x),
-    min_threshold = 0.8, max_threshold = 0.97, range_length = 100))
-
-# Defining manually river data to test Choukalian's method
-# river_data <- c(1.7, 2.2, 14.4, 1.1, 0.4, 20.6, 5.3, 0.7, 1.9, 13, 12, 9.3, 1.4,
-# 18.7, 8.5, 25.5, 11.6, 14.1, 22.1, 1.1, 2.5, 14.4, 1.7, 37.6, 0.6, 2.2, 39, 0.3, 15,
-# 11, 7.3, 22.9, 1.7, 0.1, 1.1, 0.6, 9, 1.7, 7, 20.1, 0.4, 2.8, 14.1, 9.9, 10.4, 10.7, 30,
-# 3.6, 5.6, 30.8, 13.3, 4.2, 25.5, 3.4, 11.9, 21.5, 27.6, 36.4, 2.7, 64, 1.5, 2.5,
-# 27.4, 1, 27.1, 20.2, 16.8, 5.3, 9.7, 27.5, 2.5, 27)
+    min_threshold = 0.8, max_threshold = 0.995, range_length = 100))
 
 # Calling the function Choukalian_method above to calculate optimal thresholds for each stock
 u_choukalian <- lapply(transformed_returns, function (x) Choukalian_method(as.vector(x),
@@ -425,7 +427,9 @@ u_choukalian <- lapply(transformed_returns, function (x) Choukalian_method(as.ve
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
 opt_thresholds <- data.frame(cbind(u_ferreira, u_loretan, u_dumounchel,
     u_li_rmse, u_mrlplot, u_psplot, u_hillplot, u_choukalian))
-rownames(opt_thresholds) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD", "Crude Oil Brent")
+rownames(opt_thresholds) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD",
+    "Crude Oil Brent", "Ebro River Flow")
+print(formattable(opt_thresholds))
 
 ####################################################################################################
 ############-- BLOCK 4: ESTIMATING MARKET RISK MEASURES FOR EACH THRESHOLD --#######################
@@ -452,7 +456,7 @@ for (j in 1:ncol(opt_thresholds)) {
     pareto_quantiles <- list()
     for (i in 1:length(all_returns)) {
         mrm <- market_risk_measure(returns = all_returns[[i]],
-            threshold_value = as.numeric(opt_thresholds[i, j]), conf_level = 0.99, 
+            threshold_value = as.numeric(opt_thresholds[i, j]), conf_level = 0.99,
             size_train = 0.75)
         
         pareto_quantiles <- c(pareto_quantiles, mrm[[1]])
@@ -463,7 +467,8 @@ for (j in 1:ncol(opt_thresholds)) {
     mrm_stats <- data.frame(mrm_stats)
     colnames(mrm_stats) <- c("Quantiles S&P500", "VaR S&P500", "ES S&P500", "Quantiles BTC/USD", "VaR BTC/USD", "ES BTC/USD",
         "Quantiles GBP/USD", "VaR GBP/USD", "ES GBP/USD", "Quantiles GOLD/USD", "VaR GOLD/USD", "ES GOLD/USD",
-        "Quantiles Crude Oil Brent", "VaR Crude Oil Brent", "ES Crude Oil Brent")
+        "Quantiles Crude Oil Brent", "VaR Crude Oil Brent", "ES Crude Oil Brent", "Quantiles Ebro River Flow",
+        "VaR Ebro River Flow", "ES Ebro River Flow")
     rownames(mrm_stats) <- c("Mean", "SD", "Min", "Max")
 
     addWorksheet(xlsx_workbook, sheetName = colnames(opt_thresholds)[j])
@@ -477,3 +482,43 @@ for (j in 1:ncol(opt_thresholds)) {
 
 end_time <- Sys.time()
 cat("It took ", (end_time - start_time) / 60, " minutes to run the code. \n")
+
+####################################################################################################
+###########################-- BLOCK 5: TESTING SOME THINGS --#######################################
+####################################################################################################
+
+# Test to select inicial threshold value for iterations
+test <- transformed_returns[[4]]
+u_seq <- seq(0, 0.999, length.out = 1000)
+
+for (perc in u_seq) {
+
+    u <- quantile(test, perc)
+    exceed <- test[test > u] - u
+    exceed_per_year <- apply.yearly(exceed, FUN = length)
+
+    exceed_per_year <- as.vector(exceed_per_year)
+    if (length(exceed_per_year) != 24) {
+        exceed_per_year <- c(exceed_per_year, rep(0, 24 - length(exceed_per_year)))
+    }
+
+    # print(exceed_per_year)
+
+    mean_ex <- mean(exceed_per_year)
+    var_ex <- var(exceed_per_year)
+
+    cat("Threshold: ", u, "\n")
+    # cat("Number of years with exceedances: ", length(exceed_per_year), "\n")
+    cat("Mean Exceedances per Year: ", mean_ex, "\n")
+    cat("Variance of Exceedances per Year: ", var_ex, "\n")
+    cat("Ratio Mean/Variance: ", mean_ex / var_ex, "\n")
+    cat("Number of total exceedances: ", sum(exceed_per_year), "\n")
+    cat("------------------------------------------------------------- \n")
+
+    if (mean_ex / var_ex > 1) {
+        cat("The threshold is optimal. \n")
+        break
+    } else {
+        cat("The threshold is not optimal. \n")
+    }
+}

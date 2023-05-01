@@ -102,10 +102,12 @@ desc_stats <- function(returns) {
 
 # Defining a function to standarize the series by subtracting the mean and dividing by
 # subtracting the mean and dividing by the conditional standard deviation
-conditional_standarization <- function(returns, aparch = FALSE) {
+conditional_standarization <- function(returns, aparch = FALSE, inverse = TRUE) {
 
+    if (inverse) {
     # Multiply for (-1) because we are interested in the extreme losses
     returns <- returns * (-1)
+    }
 
     # Using an EWMA to estimate the conditional standard deviation
     if (aparch) {
@@ -336,16 +338,6 @@ gbp_usd <- `GBPUSD=X`$`GBPUSD=X.Adjusted`
 gold_usd <- `GC=F`$`GC=F.Adjusted`
 brent_usd <- `BZ=F`$`BZ=F.Adjusted`
 
-# Getting flow data of the spanish river Ebro from 2000-10-01 to 2019-09-30
-# obtained from CEDEX (Centro de Estudios y Experimentación de Obras Públicas)
-ebro_flow <- read.csv("/Users/juancordero/Desktop/Master_Research/Input/caudal_ebro.csv",
-    header = TRUE, sep = ",")
-ebro_flow <- ebro_flow[, c(2, 4)]
-
-# Converting the dataframe to xts object for further processing
-ebro_flow$date <- as.Date(ebro_flow$date, format = "%d/%m/%Y")
-ebro_flow <- xts(ebro_flow$flow, order.by = ebro_flow$date)
-
 # Building a list with all the series of stocks to iterate over
 all_stocks <- list(sp500, btc_usd, gbp_usd, gold_usd, brent_usd)
 
@@ -393,7 +385,7 @@ lapply(transformed_returns, function(x) print(mrlplot(as.vector(x),
     nt = 20)))
 
 # Storing the optimal values of the Mean Residual Life Plot manually
-u_mrlplot <- c(1.3, 1, 1.2, 1.2, 1.2)
+u_mrlplot <- c(1.3, 0.84, 1.2, 1.2, 1.2)
 
 # Parameter Stability Plot
 par(mfrow = c(2, 1))
@@ -401,14 +393,14 @@ lapply(transformed_returns, function(x) print(tcplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)),
     nt = 20)))
 # Storing the optimal values of the Parameter Stability Plot manually
-u_psplot <- c(1.3, 1, 1.2, 1.2, 1.2)
+u_psplot <- c(1.3, 0.84, 1.2, 1.2, 1.2)
 
 # Hill Plot
 par(mfrow = c(1, 1))
 lapply(transformed_returns, function(x) print(hillplot(as.vector(x),
     tlim = c(quantile(x, 0.8), quantile(x, 0.99)))))
 # Storing the optimal values of the Hill Plot manually
-u_hillplot <- c(1.7, 1.6, 1.6, 1.6, 1.7)
+u_hillplot <- c(1.7, 1.3, 1.6, 1.6, 1.7)
 
 # Calling the function Li_rmse above to calculate optimal thresholds for each stock
 u_li_rmse <- lapply(transformed_returns, function (x) Li_method(as.vector(x),
@@ -421,7 +413,7 @@ u_choukalian <- lapply(transformed_returns, function (x) Choukalian_method(as.ve
 # Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
 opt_thresholds <- data.frame(cbind(u_dumounchel, u_ferreira, u_loretan,
     u_mrlplot, u_psplot, u_hillplot, u_li_rmse, u_choukalian))
-opt_thresholds <- data.frame(lapply(opt_thresholds, as.numeric))
+opt_thresholds <- data.frame(lapply(opt_thresholds, function(x) round(as.numeric(x), 3)))
 rownames(opt_thresholds) <- c("S&P500", "BTC/USD", "GBP/USD", "GOLD/USD",
     "Crude Oil Brent")
 print(formattable(opt_thresholds))
@@ -454,6 +446,19 @@ start_time <- Sys.time()
 # There will be a sheet for each methodology, where rows = stats and columns = stocks
 xlsx_workbook <- createWorkbook()
 
+# Adding the table corresponding to the optimal threshold values
+addWorksheet(xlsx_workbook, sheetName = "Optimal Thresholds Values")
+writeData(xlsx_workbook, sheet = "Optimal Thresholds Values", x = opt_thresholds,
+            rowNames = TRUE)
+
+# Adding the table corresponding to the optimal threshold percentiles
+addWorksheet(xlsx_workbook, sheetName = "Optimal Thresholds Percentiles")
+writeData(xlsx_workbook, sheet = "Optimal Thresholds Percentiles", x = opt_percentiles,
+            rowNames = TRUE)
+saveWorkbook(xlsx_workbook,
+                file = "/Users/juancordero/Desktop/Master_Research/Output/results.xlsx",
+                overwrite = TRUE)
+
 # Looping through the optimal thresholds (one for each methodology)
 # and through the returns series and estimating VaR and ES
 for (j in 1:ncol(opt_thresholds)) {
@@ -484,7 +489,7 @@ for (j in 1:ncol(opt_thresholds)) {
               row.names = TRUE)
 
     saveWorkbook(xlsx_workbook,
-                 file = "/Users/juancordero/Desktop/My_GitHub/Master_Research/Output/results.xlsx",
+                 file = "/Users/juancordero/Desktop/Master_Research/Output/results.xlsx",
                  overwrite = TRUE)
 }
 
@@ -492,10 +497,134 @@ end_time <- Sys.time()
 cat("It took ", (end_time - start_time) / 60, " minutes to run the code. \n")
 
 ####################################################################################################
-###########################-- BLOCK 5: TESTING SOME THINGS --#######################################
+#######################-- BLOCK 5: ANALYZING NON-FINANCIAL DATA --##################################
+####################################################################################################
+
+# Getting flow data of the spanish river Ebro from 2000-10-01 to 2019-09-30
+# obtained from CEDEX (Centro de Estudios y Experimentación de Obras Públicas)
+ebro_flow <- read.csv("/Users/juancordero/Desktop/Master_Research/Input/caudal_ebro.csv",
+    header = TRUE, sep = ",")
+ebro_flow <- ebro_flow[, c(2, 4)]
+
+# Converting the dataframe to xts object for further processing
+ebro_flow$date <- as.Date(ebro_flow$date, format = "%d/%m/%Y")
+ebro_flow <- xts(ebro_flow$flow, order.by = ebro_flow$date)
+
+# Plotting the time series
+plot_series(list_of_stocks = c(ebro_flow))
+
+# Getting the stats of the riverflow data
+riverflow_stats <- desc_stats(ebro_flow)
+rownames(riverflow_stats) <- c("Riverflow Ebro")
+print(formattable(riverflow_stats))
+
+# Standarize the data with conditional volatility (EWMA model)
+transformed_flow <- conditional_standarization(ebro_flow, aparch = FALSE, inverse = FALSE)
+
+# Selecting the optimal threshold for riverflow data according to the different methodologies
+# Upper 10% rule of DuMouchel (1983)
+river_dumounchel <- quantile(transformed_flow, 0.9)
+
+# Rule of Loretan and Philips (1994) for calculating the optimal threshold
+river_loretan <- quantile(transformed_flow, 1 - (length(transformed_flow)**(2/3) / 
+    log(log(length(transformed_flow))) / length(transformed_flow)))
+
+# Ferreira et al. (2003) rule: Extreme values as those above sqrt(n)
+river_ferreira <- quantile(transformed_flow, 1 - sqrt(length(transformed_flow))
+    / length(transformed_flow))
+
+# Mean Excess Plot or Mean Residual Life Plot
+par(mfrow = c(1, 1))
+print(mrlplot(as.vector(transformed_flow), tlim = c(quantile(transformed_flow, 0.8), 
+    quantile(transformed_flow, 0.99)), nt = 20))
+
+# Storing the optimal values of the Mean Residual Life Plot manually
+river_mrlplot <- 0.0015
+
+# Parameter Stability Plot
+par(mfrow = c(2, 1))
+print(tcplot(as.vector(transformed_flow), tlim = c(quantile(transformed_flow, 0.8),
+    quantile(transformed_flow, 0.99)), nt = 20))
+# Storing the optimal values of the Parameter Stability Plot manually
+river_psplot <- 0.0015
+
+# Hill Plot
+par(mfrow = c(1, 1))
+print(hillplot(as.vector(transformed_flow), tlim = c(quantile(transformed_flow, 0.8),
+    quantile(transformed_flow, 0.99))))
+# Storing the optimal values of the Hill Plot manually
+river_hillplot <- 0.0043
+
+# Calling the function Li_rmse above to calculate optimal thresholds for each stock
+river_li_rmse <- Li_method(as.vector(transformed_flow), min_threshold = 0.8,
+    max_threshold = 0.995, range_length = 100)
+
+# Calling the function Choukalian_method above to calculate optimal thresholds for each stock
+river_choukalian <- Choukalian_method(as.vector(transformed_flow),
+    initial_threshold = 0.8)
+
+# Storing all the optimal thresholds in a dataframe (rows = stocks, columns = methodologies)
+river_thresholds <- data.frame(cbind(river_dumounchel, river_ferreira, river_loretan,
+    river_mrlplot, river_psplot, river_hillplot, river_li_rmse, river_choukalian))
+river_thresholds <- data.frame(lapply(river_thresholds, function(x) round(as.numeric(x), 5)))
+rownames(river_thresholds) <- c("Riverflow Ebro")
+print(formattable(river_thresholds))
+
+river_percentiles <- data.frame(nrow = 1, ncol = 8)
+for (u in 1:ncol(river_thresholds)) {
+    river_threshold <- river_thresholds[1, u]
+    river_percentile <- length(transformed_flow[transformed_flow <= river_threshold]) / 
+        length(transformed_flow)
+    river_percentiles[1,u] <- river_percentile
+}
+colnames(river_percentiles) <- colnames(river_thresholds)
+rownames(river_percentiles) <- c("Riverflow Ebro")
+print(formattable(river_percentiles))
+
+gpd_quantiles <- data.frame(nrow = 1, ncol = 8)
+# Estimating the pareto quantiles for the riverflow data
+for (u in 1:ncol(river_thresholds)) {
+    threshold_value <- river_thresholds[1, u]
+
+    # Fitting a Generalized Pareto Distribution to the exceedances
+    gpd_fit <- gpd(transformed_flow, threshold_value)
+
+    # Storing GPD quantiles for each threshold value
+    gpd_quantile <- riskmeasures(gpd_fit, 0.99)[,2]
+    gpd_quantiles[1, u] <- gpd_quantile
+}
+colnames(gpd_quantiles) <- colnames(river_thresholds)
+rownames(gpd_quantiles) <- c("Riverflow Ebro")
+
+# Storing the data obtained in an excel file with several sheets
+river_xlsx <- createWorkbook()
+# Adding the table corresponding to the optimal threshold values
+addWorksheet(river_xlsx, sheetName = "Optimal Thresholds Values")
+writeData(river_xlsx, sheet = "Optimal Thresholds Values", x = river_thresholds,
+            rowNames = TRUE)
+# Adding the table corresponding to the optimal threshold percentiles
+addWorksheet(river_xlsx, sheetName = "Optimal Thresholds Percentiles")
+writeData(river_xlsx, sheet = "Optimal Thresholds Percentiles", x = river_percentiles,
+            rowNames = TRUE)
+# Adding the table corresponding to the GPD quantiles
+addWorksheet(river_xlsx, sheetName = "GPD Quantiles")
+writeData(river_xlsx, sheet = "GPD Quantiles", x = gpd_quantiles,
+            rowNames = TRUE)
+
+saveWorkbook(river_xlsx,
+    file = "/Users/juancordero/Desktop/Master_Research/Output/river_results.xlsx",
+    overwrite = TRUE)
+
+####################################################################################################
+###########################-- BLOCK 6: TESTING SOME THINGS --#######################################
 ####################################################################################################
 
 # Test to select inicial threshold value for iterations
+# This code is trying to apply to the current data a methodology to select the initial threshold
+# value for the iterations in the case of the Choukalian method. The idea is to select the
+# threshold value so that the number of exceedances per year can be modelled by a Poisson distribution,
+# meaning that the ratio between the mean and the variance of the number of exceedances per year
+# is approximately 1
 test <- (ebro_flow - mean(ebro_flow)) / sd(ebro_flow)
 u_seq <- seq(0, 0.999, length.out = 1000)
 
